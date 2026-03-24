@@ -1,14 +1,19 @@
 document.addEventListener('DOMContentLoaded', function() {
 
   // ===== CONFIG =====
-  // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE:
-  var SHEET_API_URL = '';
-  // Example: 'https://script.google.com/macros/s/XXXXXXXXX/exec'
+  var FORMSPREE_URL = 'https://formspree.io/f/xbdznkna';
 
   // Init Lucide Icons
   setTimeout(function() {
     if (window.lucide) window.lucide.createIcons();
   }, 200);
+
+  // Hidden iframe for Formspree (lives on body permanently, never destroyed)
+  var iframe = document.createElement('iframe');
+  iframe.name = 'hidden_iframe';
+  iframe.id = 'hidden_iframe';
+  iframe.style.display = 'none';
+  document.body.appendChild(iframe);
 
   var appContainer = document.getElementById('app-container');
   var navScanBtn = document.getElementById('nav-scan-btn');
@@ -38,31 +43,22 @@ document.addEventListener('DOMContentLoaded', function() {
     var hasInsta = state.instaLink.trim().length > 0;
     var hasCategory = state.category.trim().length > 0;
 
-    // Base scores (low — to show problems)
     var webScore = 20 + Math.floor(Math.random() * 8);
     var trustScore = 18 + Math.floor(Math.random() * 8);
     var visScore = 22 + Math.floor(Math.random() * 10);
 
-    // Adjust based on what they provided
     if (hasUrl) webScore += 10 + Math.floor(Math.random() * 5);
     if (hasGoogle) trustScore += 15 + Math.floor(Math.random() * 5);
     if (hasInsta) visScore += 12 + Math.floor(Math.random() * 5);
-    if (hasCategory) {
-      webScore += 3;
-      visScore += 5;
-    }
+    if (hasCategory) { webScore += 3; visScore += 5; }
 
-    // Cap first-scan scores to always show problems (max 60)
     webScore = Math.min(webScore, 55 + Math.floor(Math.random() * 6));
     trustScore = Math.min(trustScore, 50 + Math.floor(Math.random() * 5));
     visScore = Math.min(visScore, 58 + Math.floor(Math.random() * 5));
 
-    // No Google link = trust capped low
     if (!hasGoogle) trustScore = Math.min(trustScore, 35);
-    // No Instagram = visibility capped
     if (!hasInsta) visScore = Math.min(visScore, 42);
 
-    // Check for repeat scan
     var storageKey = 'bgs_scan_' + normalizeUrl(state.url);
     var previousData = localStorage.getItem(storageKey);
 
@@ -70,8 +66,6 @@ document.addEventListener('DOMContentLoaded', function() {
       var prev = JSON.parse(previousData);
       state.isRepeatScan = true;
       state.previousScores = prev.scores;
-
-      // Improve scores from previous
       webScore = Math.min(90, prev.scores.website + 8 + Math.floor(Math.random() * 10));
       trustScore = Math.min(88, prev.scores.trust + 10 + Math.floor(Math.random() * 8));
       visScore = Math.min(92, prev.scores.visibility + 7 + Math.floor(Math.random() * 10));
@@ -84,7 +78,6 @@ document.addEventListener('DOMContentLoaded', function() {
     state.scores.trust = trustScore;
     state.scores.visibility = visScore;
 
-    // Save to localStorage
     localStorage.setItem(storageKey, JSON.stringify({
       scores: { website: webScore, trust: trustScore, visibility: visScore },
       date: new Date().toISOString(),
@@ -96,29 +89,65 @@ document.addEventListener('DOMContentLoaded', function() {
     return url.toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   }
 
-  // ===== SAVE LEAD TO GOOGLE SHEET =====
-  function saveLeadToSheet() {
-    if (!SHEET_API_URL) return;
+  // ===== TRIPLE-METHOD FORMSPREE SUBMISSION =====
+  function sendToFormspree() {
+    var formData = new FormData();
+    formData.append('website', state.url);
+    formData.append('location', state.location);
+    formData.append('google', state.googleLink);
+    formData.append('instagram', state.instaLink);
+    formData.append('category', state.category);
 
-    var payload = {
-      website: state.url,
-      googleLink: state.googleLink,
-      instagram: state.instaLink,
-      category: state.category,
-      location: state.location,
-      websiteScore: state.scores.website,
-      trustScore: state.scores.trust,
-      visibilityScore: state.scores.visibility
-    };
+    // METHOD 1: fetch with keepalive (modern browsers)
+    try {
+      fetch(FORMSPREE_URL, {
+        method: 'POST',
+        body: formData,
+        mode: 'no-cors',
+        keepalive: true
+      });
+      console.log('FORMSPREE: Sent via fetch');
+    } catch(e) {
+      console.log('fetch failed, trying XHR');
+    }
 
-    fetch(SHEET_API_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).catch(function(err) {
-      console.log('Sheet save error:', err);
-    });
+    // METHOD 2: XMLHttpRequest (broader compatibility)
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', FORMSPREE_URL, true);
+      xhr.send(formData);
+      console.log('FORMSPREE: Sent via XHR');
+    } catch(e) {
+      console.log('XHR failed, trying iframe');
+    }
+
+    // METHOD 3: Hidden iframe form (native HTML, no JS restrictions)
+    try {
+      var old = document.getElementById('formspree-hidden');
+      if (old) old.remove();
+
+      var form = document.createElement('form');
+      form.id = 'formspree-hidden';
+      form.method = 'POST';
+      form.action = FORMSPREE_URL;
+      form.target = 'hidden_iframe';
+      form.style.display = 'none';
+
+      var fields = { website: state.url, location: state.location, google: state.googleLink, instagram: state.instaLink, category: state.category };
+      for (var key in fields) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden';
+        inp.name = key;
+        inp.value = fields[key] || '';
+        form.appendChild(inp);
+      }
+
+      document.body.appendChild(form);
+      form.submit();
+      console.log('FORMSPREE: Sent via iframe form');
+    } catch(e) {
+      console.log('iframe form also failed:', e);
+    }
   }
 
   // ===== VIEW ROUTER =====
@@ -186,26 +215,26 @@ document.addEventListener('DOMContentLoaded', function() {
           '<div class="grid-2">',
             '<div class="form-group">',
               '<label><i data-lucide="globe" style="width:14px;height:14px;"></i> Website URL</label>',
-              '<input type="url" id="inp-url" class="input-field" placeholder="https://yourwebsite.com" required>',
+              '<input type="url" name="website" id="inp-url" class="input-field" placeholder="https://yourwebsite.com" required>',
             '</div>',
             '<div class="form-group">',
               '<label><i data-lucide="map-pin" style="width:14px;height:14px;"></i> Location / City</label>',
-              '<input type="text" id="inp-location" class="input-field" placeholder="e.g. Mumbai, New York" required>',
+              '<input type="text" name="location" id="inp-location" class="input-field" placeholder="e.g. Mumbai, New York" required>',
             '</div>',
           '</div>',
           '<div class="grid-2">',
             '<div class="form-group">',
               '<label><i data-lucide="star" style="width:14px;height:14px;"></i> Google Business Link</label>',
-              '<input type="url" id="inp-google" class="input-field" placeholder="https://g.page/...">',
+              '<input type="url" name="google" id="inp-google" class="input-field" placeholder="https://g.page/...">',
             '</div>',
             '<div class="form-group">',
               '<label><i data-lucide="instagram" style="width:14px;height:14px;"></i> Instagram Link</label>',
-              '<input type="url" id="inp-insta" class="input-field" placeholder="https://instagram.com/...">',
+              '<input type="url" name="instagram" id="inp-insta" class="input-field" placeholder="https://instagram.com/...">',
             '</div>',
           '</div>',
           '<div class="form-group">',
             '<label><i data-lucide="briefcase" style="width:14px;height:14px;"></i> Business Category</label>',
-            '<input type="text" id="inp-category" class="input-field" placeholder="e.g. Real Estate, Dental Clinic, Restaurant" required>',
+            '<input type="text" name="category" id="inp-category" class="input-field" placeholder="e.g. Real Estate, Dental Clinic, Restaurant" required>',
           '</div>',
           '<button type="submit" class="btn-primary w-full mt-2" style="padding:16px;">',
             '<i data-lucide="cpu" style="width:18px;height:18px;"></i> Start AI Scan',
@@ -216,11 +245,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     s.querySelector('#scan-form').addEventListener('submit', function(e) {
       e.preventDefault();
+
+      // 1. Save values to state
       state.url = document.getElementById('inp-url').value;
       state.location = document.getElementById('inp-location').value;
       state.googleLink = document.getElementById('inp-google').value;
       state.instaLink = document.getElementById('inp-insta').value;
       state.category = document.getElementById('inp-category').value;
+
+      // 2. Submit to Formspree via SEPARATE hidden form on body (bulletproof)
+      sendToFormspree();
+
+      // 3. Move to scanning animation
       renderView('SCANNING');
     });
     return s;
@@ -271,11 +307,7 @@ document.addEventListener('DOMContentLoaded', function() {
       } else {
         clearInterval(ivl);
         setTimeout(function() {
-          // Generate smart scores
           generateSmartScores();
-          // Save lead to Google Sheet
-          saveLeadToSheet();
-          // Show results
           renderView('RESULTS');
         }, 600);
       }
@@ -300,13 +332,11 @@ document.addEventListener('DOMContentLoaded', function() {
     var waLink = 'https://wa.me/917656010959?text=' + preMsg;
     var emailLink = 'mailto:heliogrowthai99@gmail.com?subject=Growth%20Plan%20Request&body=' + preMsg;
 
-    // Calculate losses based on scores (lower scores = higher loss)
     var avgScore = (state.scores.website + state.scores.trust + state.scores.visibility) / 3;
     var lostCustomers = Math.round(60 - (avgScore * 0.5));
     if (lostCustomers < 10) lostCustomers = 10;
     var lostRevenue = lostCustomers * 12 * (250 + Math.floor(Math.random() * 100));
 
-    // Score labels
     function getScoreLabel(score) {
       if (score >= 75) return { text: 'Good', color: 'text-success', icon: 'check-circle' };
       if (score >= 55) return { text: 'Moderate', color: 'text-warning', icon: 'info' };
@@ -317,7 +347,6 @@ document.addEventListener('DOMContentLoaded', function() {
     var trustLabel = getScoreLabel(state.scores.trust);
     var visLabel = getScoreLabel(state.scores.visibility);
 
-    // Improvement banner
     var improvementBanner = '';
     if (state.isRepeatScan && state.previousScores) {
       var webDiff = state.scores.website - state.previousScores.website;
@@ -338,7 +367,6 @@ document.addEventListener('DOMContentLoaded', function() {
       ].join('');
     }
 
-    // Impact section — different for improved vs first scan
     var impactHtml;
     if (state.isRepeatScan && avgScore >= 70) {
       impactHtml = [
@@ -362,7 +390,6 @@ document.addEventListener('DOMContentLoaded', function() {
       ].join('');
     }
 
-    // CTA buttons
     var ctaHtml;
     if (isIndia) {
       ctaHtml = [
@@ -388,28 +415,18 @@ document.addEventListener('DOMContentLoaded', function() {
     s.className = 'view-section active container';
     s.innerHTML = [
       '<div class="w-full max-w-4xl" style="padding-bottom:60px;">',
-
-        // Header
         '<div class="text-center mb-4" style="padding-top:20px;">',
           '<div class="badge mb-3"><i data-lucide="check-circle" style="width:14px;height:14px;"></i> Analysis Complete</div>',
           '<h1 class="text-gradient" style="font-size:2.4rem;">Your Growth Report</h1>',
           '<p class="text-muted">Generated for <strong>' + (state.url || 'your business') + '</strong></p>',
         '</div>',
-
-        // Improvement Banner (only on repeat scan)
         improvementBanner,
-
-        // Scores
         '<div class="grid-3 mb-4">',
           buildScoreCard('Website', 'val-web', 'ring-web', webLabel),
           buildScoreCard('Trust', 'val-trust', 'ring-trust', trustLabel),
           buildScoreCard('Visibility', 'val-vis', 'ring-vis', visLabel),
         '</div>',
-
-        // Impact
         impactHtml,
-
-        // Before / After
         '<div class="grid-2 mb-4">',
           '<div class="glass-panel p-5" style="background:rgba(239,68,68,0.03);border-color:rgba(239,68,68,0.15);">',
             '<h3 class="text-danger mb-3" style="font-size:1rem;">❌ Current State</h3>',
@@ -428,8 +445,6 @@ document.addEventListener('DOMContentLoaded', function() {
             '</ul>',
           '</div>',
         '</div>',
-
-        // Solutions
         '<h2 class="text-center mb-3 mt-8" style="font-size:1.5rem;">Recommended Solutions</h2>',
         '<div class="grid-2 mb-4">',
           buildSolutionCard('layout', 'rgba(139,92,246,0.15)', 'var(--primary)', 'High-Converting Website', 'Delivered in 24 hours to maximize your leads immediately.'),
@@ -437,8 +452,6 @@ document.addEventListener('DOMContentLoaded', function() {
           buildSolutionCard('bot', 'rgba(236,72,153,0.15)', 'var(--accent)', 'AI Calling Agent', 'Never miss a lead. 24/7 automated customer handling.'),
           buildSolutionCard('trending-up', 'rgba(16,185,129,0.15)', 'var(--success)', 'Ad Creative System', 'Data-driven ads that capture attention and convert.'),
         '</div>',
-
-        // Trust
         '<div class="glass-panel p-6 mb-4 text-center">',
           '<h3 class="mb-3" style="font-size:1.2rem;">Why Choose HelioGrowthAI?</h3>',
           '<div class="flex items-center justify-center gap-4 flex-wrap">',
@@ -448,8 +461,6 @@ document.addEventListener('DOMContentLoaded', function() {
             '<span class="badge"><i data-lucide="target" style="width:14px;height:14px;"></i> Real Results</span>',
           '</div>',
         '</div>',
-
-        // CTA
         '<div class="text-center mt-4 p-8 glass-panel" style="background:linear-gradient(to bottom, rgba(18,18,28,0.9), rgba(139,92,246,0.08));border-color:rgba(139,92,246,0.2);">',
           '<h2 class="mb-1" style="font-size:1.6rem;">Get Your FREE Custom Growth Plan</h2>',
           '<p class="text-muted mb-4">We can start improving your business within 24 hours.</p>',
@@ -458,11 +469,9 @@ document.addEventListener('DOMContentLoaded', function() {
           '</div>',
           '<p class="text-muted text-sm mt-4" style="opacity:0.6;">🔒 No spam. Your data is safe with us.</p>',
         '</div>',
-
       '</div>'
     ].join('');
 
-    // Animate rings
     var ringColor;
     setTimeout(function() {
       ringColor = state.scores.website >= 75 ? 'var(--success)' : (state.scores.website >= 55 ? 'var(--warning)' : 'var(--danger)');
@@ -478,7 +487,6 @@ document.addEventListener('DOMContentLoaded', function() {
     return s;
   }
 
-  // Helper: Score Card
   function buildScoreCard(label, valueId, ringId, labelInfo) {
     return [
       '<div class="glass-panel p-6 text-center">',
@@ -489,7 +497,6 @@ document.addEventListener('DOMContentLoaded', function() {
     ].join('');
   }
 
-  // Helper: Solution Card
   function buildSolutionCard(icon, bgColor, iconColor, title, desc) {
     return [
       '<div class="glass-panel p-4 flex items-center gap-3 hover-glow" style="cursor:pointer;">',
@@ -504,7 +511,6 @@ document.addEventListener('DOMContentLoaded', function() {
     ].join('');
   }
 
-  // Animate Circular Ring
   function animateRing(ringEl, textEl, target, color) {
     if (!ringEl || !textEl) return;
     var current = 0;
@@ -520,7 +526,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 20);
   }
 
-  // Boot
   renderView('HERO');
 
 });
